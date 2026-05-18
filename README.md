@@ -121,10 +121,118 @@ scheduling_mas/
 
 ---
 
-## References
+## DALI Agent Code Listing
 
-- S. Costantini, V. Pitoni, A. Formisano, L. De Lauretis. *From Constraints to Cognition: A Hybrid Framework for Adaptive, Explainable Scheduling.* LOPSTR 2026.
-- [DALI Framework](https://github.com/AAAI-DISIM-UnivAQ/DALI)
+Below is a condensed view of all four agent types, showing the key reactive rules and message-passing patterns used in the prototype. For the full source, see the files under `scheduling_mas/mas/types/`.
+
+```prolog
+%% =============================================================
+%% AGENT: alice (patient_type)
+%% =============================================================
+
+% Beliefs compiled from ASP baseline (tau_P, tau^S)
+appointment(alice, clinicA, docJ, t1).
+belief_available(docJ, t1).
+intend_consultation(t1).
+% Feasibility guard (tau^IC)
+can_do_local(Doctor, T) :- belief_available(Doctor, T).
+
+% Reactive rule: disruption triggers belief update + repair
+unavailableE(Doctor, T) :>
+    retract(belief_available(Doctor, T)),
+    assert(belief_unavailable(Doctor, T)),
+    attempt_local_repair(T).
+
+% Helper: attempt local repair, else delegate via mediator
+attempt_local_repair(T) :-
+    (  can_do_local(OtherDoc, T), OtherDoc \= docJ
+    -> retract(appointment(alice, clinicA, docJ, T)),
+       assert(appointment(alice, clinicA, OtherDoc, T))
+    ;  messageA(mediator, send_message(
+         request_delegation(alice,clinicA,consultation,T),
+         alice), alice)
+    ).
+
+% Reactive rule: delegation approved by mediator
+delegation_approvedE(Doctor, _FromClinic, T) :>
+    retract(appointment(alice, clinicA, _, T)),
+    assert(appointment(alice, clinicA, Doctor, T)),
+    assert(belief_available(Doctor, T)).
+
+% Reactive rule: consultation completed
+consultation_doneE(Doctor, T) :>
+    assert(consultation_done(Doctor, T)),
+    retract(intend_consultation(T)).
+
+%% =============================================================
+%% AGENT: docJ (doctor_clinicA_type)
+%% =============================================================
+
+can_do_consultation(docJ, t1).
+% Emergency makes doctor unavailable, notifies mediator + patient
+emergencyE(Reason) :>
+    retract(can_do_consultation(docJ, t1)),
+    messageA(mediator, send_message(
+      doctor_unavailable(docJ,clinicA,t1,Reason), docJ), docJ),
+    messageA(alice, send_message(
+      unavailable(docJ, t1), docJ), docJ).
+
+%% =============================================================
+%% AGENT: docS (doctor_clinicB_type)
+%% =============================================================
+
+can_do_consultation(docS, t1).
+% Accept lending request if available
+lend_requestE(TargetClinic, _Action, T) :>
+    (  can_do_consultation(docS, T)
+    -> messageA(mediator, send_message(
+         lend_accepted(docS,clinicB,TargetClinic,T),
+         docS), docS)
+    ;  messageA(mediator, send_message(
+         lend_rejected(docS,clinicB,TargetClinic,T),
+         docS), docS)
+    ).
+% Perform consultation after lending approved
+perform_consultationE(Patient, T) :>
+    messageA(Patient, send_message(
+      consultation_done(docS, T), docS), docS).
+
+%% =============================================================
+%% AGENT: mediator (mediator_type)
+%% =============================================================
+
+group_member(clinicA, docJ).  group_member(clinicB, docS).
+available_doctor(docJ, clinicA, t1).
+available_doctor(docS, clinicB, t1).
+% Disruption notification: update availability
+doctor_unavailableE(Doctor, Clinic, T, _Reason) :>
+    retract(available_doctor(Doctor, Clinic, T)).
+% Delegation request: find doctor in another group
+request_delegationE(Patient, Src, Action, T) :>
+    find_external_doctor(Src, Action, T).
+% Helper: search and send lending request
+find_external_doctor(Src, _Action, T) :-
+    (  available_doctor(Doc, OtherClinic, T),
+       OtherClinic \= Src
+    -> messageA(Doc, send_message(
+         lend_request(Src, consultation, T),
+         mediator), mediator)
+    ;  messageA(alice, send_message(
+         delegation_failed(T), mediator), mediator)
+    ).
+% Lending accepted: notify patient, instruct doctor
+lend_acceptedE(Doctor, _From, Target, T) :>
+    messageA(alice, send_message(
+      delegation_approved(Doctor, clinicB, T),
+      mediator), mediator),
+    messageA(Doctor, send_message(
+      perform_consultation(alice, T),
+      mediator), mediator).
+
+%% Past events (memory logging)
+do_consultationP(docS, t1).
+unavailableP(docJ, t1).
+```
 
 ---
 
