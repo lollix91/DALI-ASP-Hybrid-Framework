@@ -1,0 +1,63 @@
+%% ============================================================
+%% DOCTOR CLINIC-A AGENT TYPE - Hybrid ASP/L-DINF Scheduling
+%% ============================================================
+%% Represents a doctor assigned to clinicA (e.g., Dr. Jones).
+%% Implements:
+%%   - B_docJ(can_do_docJ(consultation(t1)))
+%%   - Belief update upon disruption (becomes unavailable)
+%%   - Notification to group members via mediator
+%% ============================================================
+
+:- dynamic can_do_consultation/2.
+:- dynamic available/1.
+:- dynamic group_membership/1.
+:- dynamic unavailable_reason/2.
+
+%% --- Initial beliefs (compiled from baseline schedule) ---
+can_do_consultation(docJ, t1).
+available(t1).
+group_membership(clinicA).
+
+%% --- Initial output ---
+:- write('=== Doctor Agent (docJ @ clinicA) initialized ==='), nl,
+   write('  Available for consultation at t1'), nl.
+
+
+%% ============================================================
+%% REACTIVE RULES
+%% ============================================================
+
+%% --- Emergency: Doctor becomes unavailable ---
+%% This simulates the disruption event (e.g., emergency call)
+%% Triggered externally (e.g., by user or environment simulator)
+emergencyE(Reason) :>
+    write('[docJ] EMERGENCY: '), write(Reason), nl,
+    write('[docJ] Becoming unavailable for all scheduled slots.'), nl,
+    retract(can_do_consultation(docJ, t1)),
+    retract(available(t1)),
+    assert(unavailable_reason(t1, Reason)),
+    write('[docJ] Notifying mediator of unavailability...'), nl,
+    messageA(mediator, send_message(doctor_unavailable(docJ, clinicA, t1, Reason), docJ), docJ),
+    write('[docJ] Notifying patient alice...'), nl,
+    messageA(alice, send_message(unavailable(docJ, t1), docJ), docJ).
+
+%% --- Query availability (used by mediator during delegation) ---
+check_availabilityE(TimeSlot) :>
+    write('[docJ] Availability check for slot '), write(TimeSlot), nl,
+    (   can_do_consultation(docJ, TimeSlot)
+    ->  write('[docJ] Available at '), write(TimeSlot), nl,
+        messageA(mediator, send_message(available_response(docJ, clinicA, TimeSlot, yes), docJ), docJ)
+    ;   write('[docJ] NOT available at '), write(TimeSlot), nl,
+        messageA(mediator, send_message(available_response(docJ, clinicA, TimeSlot, no), docJ), docJ)
+    ).
+
+%% --- Status query ---
+statusE :>
+    write('=== docJ Status ==='), nl,
+    write('  Group: clinicA'), nl,
+    (   available(T) 
+    ->  write('  Available at: '), write(T), nl
+    ;   write('  Currently unavailable'), nl),
+    (   unavailable_reason(T2, R) 
+    ->  write('  Unavailable reason at '), write(T2), write(': '), write(R), nl
+    ;   true).

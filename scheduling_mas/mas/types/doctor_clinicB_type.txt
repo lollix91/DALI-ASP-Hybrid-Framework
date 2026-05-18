@@ -1,0 +1,81 @@
+%% ============================================================
+%% DOCTOR CLINIC-B AGENT TYPE - Hybrid ASP/L-DINF Scheduling
+%% ============================================================
+%% Represents a doctor assigned to clinicB (e.g., Dr. Smith).
+%% Implements:
+%%   - B_docS(can_do_docS(consultation(t1)))
+%%   - Lending acceptance: agent temporarily joins another group
+%%   - do_docS(consultation(t1)) upon successful lending
+%% ============================================================
+
+:- dynamic can_do_consultation/2.
+:- dynamic available/1.
+:- dynamic group_membership/1.
+:- dynamic lent_to/2.
+:- dynamic performed_consultation/2.
+
+%% --- Initial beliefs ---
+can_do_consultation(docS, t1).
+available(t1).
+group_membership(clinicB).
+
+%% --- Initial output ---
+:- write('=== Doctor Agent (docS @ clinicB) initialized ==='), nl,
+   write('  Available for consultation at t1'), nl.
+
+
+%% ============================================================
+%% REACTIVE RULES
+%% ============================================================
+
+%% --- Lending Request from Mediator ---
+%% Implements: lend_clinicA(docS, clinicB, consultation(t1))
+%% The mediator asks if docS can be lent to clinicA
+lend_requestE(TargetClinic, Action, TimeSlot) :>
+    write('[docS] Lending request received: join '), write(TargetClinic),
+    write(' for '), write(Action), write(' at '), write(TimeSlot), nl,
+    (   can_do_consultation(docS, TimeSlot)
+    ->  write('[docS] ACCEPTING lending request.'), nl,
+        assert(lent_to(TargetClinic, TimeSlot)),
+        retract(available(TimeSlot)),
+        messageA(mediator, send_message(lend_accepted(docS, clinicB, TargetClinic, TimeSlot), docS), docS)
+    ;   write('[docS] REJECTING: not available at '), write(TimeSlot), nl,
+        messageA(mediator, send_message(lend_rejected(docS, clinicB, TargetClinic, TimeSlot), docS), docS)
+    ).
+
+%% --- Perform Consultation (after lending approved) ---
+%% Implements: do_docS(consultation(t1))
+perform_consultationE(Patient, TimeSlot) :>
+    write('[docS] Performing consultation for '), write(Patient),
+    write(' at slot '), write(TimeSlot), nl,
+    assert(performed_consultation(Patient, TimeSlot)),
+    write('[docS] Consultation completed. Notifying patient...'), nl,
+    messageA(alice, send_message(consultation_done(docS, TimeSlot), docS), docS),
+    write('[docS] Returning to original group (clinicB).'), nl,
+    retract(lent_to(_, TimeSlot)),
+    assert(available(TimeSlot)),
+    write('[docS] Lending concluded. Back in clinicB.'), nl.
+
+%% --- Query availability ---
+check_availabilityE(TimeSlot) :>
+    write('[docS] Availability check for slot '), write(TimeSlot), nl,
+    (   can_do_consultation(docS, TimeSlot)
+    ->  write('[docS] Available at '), write(TimeSlot), nl,
+        messageA(mediator, send_message(available_response(docS, clinicB, TimeSlot, yes), docS), docS)
+    ;   write('[docS] NOT available at '), write(TimeSlot), nl,
+        messageA(mediator, send_message(available_response(docS, clinicB, TimeSlot, no), docS), docS)
+    ).
+
+%% --- Status query ---
+statusE :>
+    write('=== docS Status ==='), nl,
+    write('  Group: clinicB'), nl,
+    (   available(T)
+    ->  write('  Available at: '), write(T), nl
+    ;   write('  Currently not available (lent out)'), nl),
+    (   lent_to(C, T2)
+    ->  write('  Lent to: '), write(C), write(' for slot '), write(T2), nl
+    ;   true),
+    (   performed_consultation(P, T3)
+    ->  write('  Performed consultation for '), write(P), write(' at '), write(T3), nl
+    ;   true).

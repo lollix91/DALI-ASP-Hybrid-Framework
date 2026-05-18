@@ -1,0 +1,124 @@
+%% ============================================================
+%% PATIENT AGENT TYPE - Hybrid ASP/L-DINF Scheduling Framework
+%% ============================================================
+%% Implements L-DINF concepts:
+%%   B_i (beliefs), intend_i (intentions), can_do_i (feasibility),
+%%   pref_do_i (preferences), belief update via reactive rules.
+%%
+%% This agent represents a patient (e.g., Alice) who:
+%%   - Holds beliefs about her scheduled appointment (baseline from ASP)
+%%   - Reacts to disruptions (doctor unavailability)
+%%   - Attempts local repair, then requests delegation if needed
+%% ============================================================
+
+:- dynamic appointment/4.
+:- dynamic belief_available/2.
+:- dynamic belief_unavailable/2.
+:- dynamic intend_consultation/1.
+:- dynamic can_do_local/2.
+:- dynamic delegation_active/3.
+:- dynamic consultation_done/2.
+:- dynamic repair_attempted/1.
+:- dynamic schedule_state/1.
+
+%% --- Baseline Schedule (compiled from ASP via tau^S) ---
+%% appointment(Patient, Clinic, Doctor, TimeSlot)
+appointment(alice, clinicA, docJ, t1).
+
+%% --- Compiled Beliefs (from tau_P) ---
+%% B_alice(needs_consultation(t1))
+intend_consultation(t1).
+
+%% B_alice(prefers_clinic(clinicA))
+belief_prefers_clinic(clinicA).
+
+%% B_alice(can_do_docJ(consultation(t1)))
+belief_available(docJ, t1).
+
+%% --- Compiled Feasibility (from tau^IC) ---
+%% can_do check: a consultation at T is feasible if a doctor is available
+can_do_local(Doctor, T) :- belief_available(Doctor, T).
+
+%% --- Schedule state tracking ---
+schedule_state(nominal).
+
+%% --- Initial output ---
+:- write('=== Patient Agent (Alice) initialized ==='), nl,
+   write('  Baseline: appointment(alice, clinicA, docJ, t1)'), nl,
+   write('  Intention: consultation at t1'), nl.
+
+
+%% ============================================================
+%% REACTIVE RULES - Event-driven belief update and repair
+%% ============================================================
+
+%% --- Disruption Event: Doctor becomes unavailable ---
+%% Triggered when mediator/environment notifies unavailability
+%% Implements: [G:+neg(can_do_docJ(consultation(t1)))]
+unavailableE(Doctor, T) :>
+    write('[Alice] DISRUPTION: '), write(Doctor), write(' unavailable at '), write(T), nl,
+    retract(belief_available(Doctor, T)),
+    assert(belief_unavailable(Doctor, T)),
+    retract(schedule_state(nominal)),
+    assert(schedule_state(disrupted)),
+    attempt_local_repairA(T).
+
+%% --- Local Repair Attempt ---
+%% Check if any other doctor in the same group can perform the action
+attempt_local_repairE(T) :>
+    write('[Alice] Attempting local repair for slot '), write(T), nl,
+    (   can_do_local(OtherDoc, T), OtherDoc \= docJ
+    ->  write('[Alice] LOCAL REPAIR: Found '), write(OtherDoc), nl,
+        retract(appointment(alice, clinicA, docJ, T)),
+        assert(appointment(alice, clinicA, OtherDoc, T)),
+        retract(schedule_state(disrupted)),
+        assert(schedule_state(repaired_local)),
+        write('[Alice] Schedule repaired locally.'), nl
+    ;   write('[Alice] No local repair available. Requesting delegation...'), nl,
+        assert(repair_attempted(T)),
+        messageA(mediator, send_message(request_delegation(alice, clinicA, consultation, T), alice), alice)
+    ).
+
+%% --- Delegation Response: Doctor lent from another group ---
+%% Implements successful lend_G(docS, clinicB, consultation(t1))
+delegation_approvedE(Doctor, FromClinic, T) :>
+    write('[Alice] DELEGATION APPROVED: '), write(Doctor),
+    write(' from '), write(FromClinic), write(' for slot '), write(T), nl,
+    retract(appointment(alice, clinicA, docJ, T)),
+    assert(appointment(alice, clinicA, Doctor, T)),
+    assert(belief_available(Doctor, T)),
+    assert(delegation_active(Doctor, FromClinic, T)),
+    retract(schedule_state(disrupted)),
+    assert(schedule_state(repaired_delegation)),
+    write('[Alice] Schedule updated: appointment(alice, clinicA, '),
+    write(Doctor), write(', '), write(T), write(')'), nl.
+
+%% --- Consultation Completed ---
+%% Implements: do^P_i(consultation(t))
+consultation_doneE(Doctor, T) :>
+    write('[Alice] Consultation completed with '), write(Doctor),
+    write(' at slot '), write(T), nl,
+    assert(consultation_done(Doctor, T)),
+    retract(intend_consultation(T)),
+    retract(schedule_state(_)),
+    assert(schedule_state(completed)),
+    write('[Alice] Intention fulfilled. Schedule state: completed.'), nl.
+
+%% --- Fallback: ASP re-optimization needed ---
+delegation_failedE(T) :>
+    write('[Alice] DELEGATION FAILED for slot '), write(T), nl,
+    write('[Alice] FALLBACK: Returning to ASP for re-optimization.'), nl,
+    retract(schedule_state(disrupted)),
+    assert(schedule_state(fallback_asp)).
+
+%% --- Status query (for logging/explanation trace) ---
+statusE :>
+    write('=== Alice Status ==='), nl,
+    (appointment(alice, C, D, T) -> 
+        write('  Current appointment: '), write(appointment(alice,C,D,T)), nl
+    ;   write('  No active appointment'), nl),
+    (intend_consultation(T2) -> 
+        write('  Active intention: consultation('), write(T2), write(')'), nl
+    ;   write('  No active intention'), nl),
+    schedule_state(S),
+    write('  Schedule state: '), write(S), nl.

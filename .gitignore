@@ -1,0 +1,10 @@
+# Runtime generated files
+scheduling_mas/build/*.txt
+scheduling_mas/work/*.txt
+scheduling_mas/work/log/
+scheduling_mas/conf/mas/*.txt
+scheduling_mas/server.txt
+scheduling_mas/log/
+
+# Keep gitkeep files
+!**/.gitkeep

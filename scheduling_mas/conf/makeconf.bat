@@ -1,0 +1,1 @@
+echo agent('work/%1',%1,'no',italian,['conf/communication'],['../../DALI/src/communication_fipa','../../DALI/src/learning','../../DALI/src/planasp'],'no','../../DALI/src/onto/dali_onto.txt',[]). > conf/mas/%~nx2

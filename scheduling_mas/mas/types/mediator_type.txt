@@ -1,0 +1,130 @@
+%% ============================================================
+%% MEDIATOR AGENT TYPE - Hybrid ASP/L-DINF Scheduling
+%% ============================================================
+%% Implements the delegation protocol for inter-group lending.
+%% Responsibilities:
+%%   - Maintains group membership knowledge
+%%   - Receives disruption notifications
+%%   - Searches for available agents across groups
+%%   - Orchestrates the lend_G(i, H, phi_A) protocol
+%%   - Logs explanation traces for all scheduling events
+%% ============================================================
+
+:- dynamic member/2.
+:- dynamic available_doctor/3.
+:- dynamic pending_delegation/4.
+:- dynamic delegation_log/5.
+:- dynamic event_counter/1.
+:- dynamic trace_log/3.
+
+%% --- Group Membership Knowledge ---
+member(clinicA, docJ).
+member(clinicB, docS).
+
+%% --- Available doctors (updated via messages) ---
+available_doctor(docJ, clinicA, t1).
+available_doctor(docS, clinicB, t1).
+
+%% --- Event counter for trace ---
+event_counter(0).
+
+%% --- Initial output ---
+:- write('=== Mediator Agent initialized ==='), nl,
+   write('  Groups: clinicA={docJ}, clinicB={docS}'), nl,
+   write('  Ready for delegation protocol.'), nl.
+
+
+%% ============================================================
+%% HELPER: Trace logging
+%% ============================================================
+log_event(Type, Details) :-
+    retract(event_counter(N)),
+    N1 is N + 1,
+    assert(event_counter(N1)),
+    assert(trace_log(N1, Type, Details)),
+    write('[TRACE #'), write(N1), write('] '),
+    write(Type), write(': '), write(Details), nl.
+
+
+%% ============================================================
+%% REACTIVE RULES
+%% ============================================================
+
+%% --- Doctor Unavailability Notification ---
+%% Received from a doctor agent when a disruption occurs
+doctor_unavailableE(Doctor, Clinic, TimeSlot, Reason) :>
+    write('[Mediator] Received unavailability: '), write(Doctor),
+    write(' @ '), write(Clinic), write(' slot '), write(TimeSlot), nl,
+    retract(available_doctor(Doctor, Clinic, TimeSlot)),
+    log_event(disruption, unavailable(Doctor, Clinic, TimeSlot, Reason)),
+    write('[Mediator] Updated availability. Waiting for delegation requests.'), nl.
+
+%% --- Delegation Request from Patient ---
+%% Patient could not find local repair, asks mediator to find cross-group
+request_delegationE(Patient, SourceClinic, Action, TimeSlot) :>
+    write('[Mediator] Delegation request from '), write(Patient), nl,
+    write('  Action: '), write(Action), write(' at slot '), write(TimeSlot), nl,
+    write('  Source clinic: '), write(SourceClinic), nl,
+    log_event(delegation_request, request(Patient, SourceClinic, Action, TimeSlot)),
+    assert(pending_delegation(Patient, SourceClinic, Action, TimeSlot)),
+    find_external_doctorA(SourceClinic, Action, TimeSlot).
+
+%% --- Search for available doctor in other groups ---
+find_external_doctorE(SourceClinic, Action, TimeSlot) :>
+    write('[Mediator] Searching for available doctor outside '), write(SourceClinic), nl,
+    (   available_doctor(Doctor, OtherClinic, TimeSlot),
+        OtherClinic \= SourceClinic
+    ->  write('[Mediator] FOUND: '), write(Doctor), write(' @ '), write(OtherClinic), nl,
+        log_event(candidate_found, candidate(Doctor, OtherClinic, TimeSlot)),
+        write('[Mediator] Sending lending request to '), write(Doctor), nl,
+        messageA(docS, send_message(lend_request(SourceClinic, Action, TimeSlot), mediator), mediator)
+    ;   write('[Mediator] No external doctor available. Delegation FAILED.'), nl,
+        log_event(delegation_failed, no_candidate(SourceClinic, TimeSlot)),
+        pending_delegation(Patient, _, _, TimeSlot),
+        messageA(alice, send_message(delegation_failed(TimeSlot), mediator), mediator)
+    ).
+
+%% --- Lending Accepted by External Doctor ---
+lend_acceptedE(Doctor, FromClinic, TargetClinic, TimeSlot) :>
+    write('[Mediator] Lending ACCEPTED by '), write(Doctor), nl,
+    write('  From: '), write(FromClinic), write(' -> To: '), write(TargetClinic), nl,
+    log_event(lend_accepted, lend(Doctor, FromClinic, TargetClinic, TimeSlot)),
+    retract(pending_delegation(Patient, TargetClinic, _, TimeSlot)),
+    assert(delegation_log(Doctor, FromClinic, TargetClinic, TimeSlot, accepted)),
+    write('[Mediator] Notifying patient of delegation approval...'), nl,
+    messageA(alice, send_message(delegation_approved(Doctor, FromClinic, TimeSlot), mediator), mediator),
+    write('[Mediator] Instructing '), write(Doctor), write(' to perform consultation...'), nl,
+    messageA(docS, send_message(perform_consultation(alice, TimeSlot), mediator), mediator).
+
+%% --- Lending Rejected by External Doctor ---
+lend_rejectedE(Doctor, FromClinic, TargetClinic, TimeSlot) :>
+    write('[Mediator] Lending REJECTED by '), write(Doctor), nl,
+    log_event(lend_rejected, reject(Doctor, FromClinic, TargetClinic, TimeSlot)),
+    write('[Mediator] Searching for another candidate...'), nl,
+    retract(available_doctor(Doctor, FromClinic, TimeSlot)),
+    find_external_doctorA(TargetClinic, consultation, TimeSlot).
+
+%% --- Print full explanation trace ---
+print_traceE :>
+    write(''), nl,
+    write('========== EXPLANATION TRACE =========='), nl,
+    print_all_traces.
+
+print_all_traces :-
+    trace_log(N, Type, Details),
+    write('  ['), write(N), write('] '), write(Type), write(': '), write(Details), nl,
+    fail.
+print_all_traces :- 
+    write('======================================='), nl.
+
+%% --- Status query ---
+statusE :>
+    write('=== Mediator Status ==='), nl,
+    write('  Group membership:'), nl,
+    (member(G, D) -> write('    '), write(D), write(' in '), write(G), nl ; true),
+    write('  Available doctors:'), nl,
+    (available_doctor(D2, C2, T2) -> write('    '), write(D2), write(' @ '), write(C2), write(' slot '), write(T2), nl ; true),
+    write('  Pending delegations:'), nl,
+    (pending_delegation(P, SC, A, TS) -> write('    '), write(P), write(' needs '), write(A), write(' at '), write(TS), nl ; true),
+    event_counter(EC),
+    write('  Total events logged: '), write(EC), nl.
