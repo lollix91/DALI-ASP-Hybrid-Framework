@@ -61,11 +61,11 @@ unavailableE(Doctor, T) :>
     assert(belief_unavailable(Doctor, T)),
     retract(schedule_state(nominal)),
     assert(schedule_state(disrupted)),
-    attempt_local_repairA(T).
+    attempt_local_repair(T).
 
-%% --- Local Repair Attempt ---
+%% --- Local Repair Attempt (helper predicate) ---
 %% Check if any other doctor in the same group can perform the action
-attempt_local_repairE(T) :>
+attempt_local_repair(T) :-
     write('[Alice] Attempting local repair for slot '), write(T), nl,
     (   can_do_local(OtherDoc, T), OtherDoc \= docJ
     ->  write('[Alice] LOCAL REPAIR: Found '), write(OtherDoc), nl,

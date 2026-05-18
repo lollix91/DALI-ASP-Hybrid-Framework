@@ -10,7 +10,7 @@
 %%   - Logs explanation traces for all scheduling events
 %% ============================================================
 
-:- dynamic member/2.
+:- dynamic group_member/2.
 :- dynamic available_doctor/3.
 :- dynamic pending_delegation/4.
 :- dynamic delegation_log/5.
@@ -18,8 +18,8 @@
 :- dynamic trace_log/3.
 
 %% --- Group Membership Knowledge ---
-member(clinicA, docJ).
-member(clinicB, docS).
+group_member(clinicA, docJ).
+group_member(clinicB, docS).
 
 %% --- Available doctors (updated via messages) ---
 available_doctor(docJ, clinicA, t1).
@@ -67,21 +67,21 @@ request_delegationE(Patient, SourceClinic, Action, TimeSlot) :>
     write('  Source clinic: '), write(SourceClinic), nl,
     log_event(delegation_request, request(Patient, SourceClinic, Action, TimeSlot)),
     assert(pending_delegation(Patient, SourceClinic, Action, TimeSlot)),
-    find_external_doctorA(SourceClinic, Action, TimeSlot).
+    find_external_doctor(SourceClinic, Action, TimeSlot).
 
-%% --- Search for available doctor in other groups ---
-find_external_doctorE(SourceClinic, Action, TimeSlot) :>
+%% --- Search for available doctor in other groups (helper predicate) ---
+find_external_doctor(SourceClinic, _Action, TimeSlot) :-
     write('[Mediator] Searching for available doctor outside '), write(SourceClinic), nl,
     (   available_doctor(Doctor, OtherClinic, TimeSlot),
         OtherClinic \= SourceClinic
     ->  write('[Mediator] FOUND: '), write(Doctor), write(' @ '), write(OtherClinic), nl,
         log_event(candidate_found, candidate(Doctor, OtherClinic, TimeSlot)),
         write('[Mediator] Sending lending request to '), write(Doctor), nl,
-        messageA(docS, send_message(lend_request(SourceClinic, Action, TimeSlot), mediator), mediator)
+        messageA(Doctor, send_message(lend_request(SourceClinic, consultation, TimeSlot), mediator), mediator)
     ;   write('[Mediator] No external doctor available. Delegation FAILED.'), nl,
         log_event(delegation_failed, no_candidate(SourceClinic, TimeSlot)),
         pending_delegation(Patient, _, _, TimeSlot),
-        messageA(alice, send_message(delegation_failed(TimeSlot), mediator), mediator)
+        messageA(Patient, send_message(delegation_failed(TimeSlot), mediator), mediator)
     ).
 
 %% --- Lending Accepted by External Doctor ---
@@ -102,7 +102,7 @@ lend_rejectedE(Doctor, FromClinic, TargetClinic, TimeSlot) :>
     log_event(lend_rejected, reject(Doctor, FromClinic, TargetClinic, TimeSlot)),
     write('[Mediator] Searching for another candidate...'), nl,
     retract(available_doctor(Doctor, FromClinic, TimeSlot)),
-    find_external_doctorA(TargetClinic, consultation, TimeSlot).
+    find_external_doctor(TargetClinic, consultation, TimeSlot).
 
 %% --- Print full explanation trace ---
 print_traceE :>
@@ -121,7 +121,7 @@ print_all_traces :-
 statusE :>
     write('=== Mediator Status ==='), nl,
     write('  Group membership:'), nl,
-    (member(G, D) -> write('    '), write(D), write(' in '), write(G), nl ; true),
+    (group_member(G, D) -> write('    '), write(D), write(' in '), write(G), nl ; true),
     write('  Available doctors:'), nl,
     (available_doctor(D2, C2, T2) -> write('    '), write(D2), write(' @ '), write(C2), write(' slot '), write(T2), nl ; true),
     write('  Pending delegations:'), nl,
