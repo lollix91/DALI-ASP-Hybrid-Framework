@@ -236,6 +236,219 @@ unavailableP(docJ, t1).
 
 ---
 
+## Supplementary Material
+
+The following sections provide additional detail that was omitted from the paper for space constraints. They are intended to support reproducibility and deeper understanding of the framework.
+
+---
+
+### Hybrid Execution Pipeline (Architecture Diagram)
+
+The overall workflow follows this pipeline:
+
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│                         HYBRID EXECUTION PIPELINE                          │
+└────────────────────────────────────────────────────────────────────────────┘
+
+ ┌──────────────────┐         ┌─────────────────────────┐
+ │  Blueprint       │         │   ASP Solver            │
+ │  Personas        │────────▶│   (Global Optimization) │
+ │  (patient facts) │         │                         │
+ └──────────────────┘         └───────────┬─────────────┘
+                                          │
+                               Baseline Schedule S
+                                          │
+                                          ▼
+                              ┌───────────────────────┐
+                              │   Compilation τ       │
+                              │   (ASP → L-DINF)      │
+                              └───────────┬───────────┘
+                                          │
+                          Beliefs, Intentions, Feasibility,
+                          Preferences, Group Authorization
+                                          │
+                                          ▼
+                              ┌───────────────────────┐
+                              │   L-DINF Runtime Layer│
+                              │   (DALI Agents)       │
+                              └───────────┬───────────┘
+                                          │
+                              ┌───────────▼───────────┐
+                              │   Disruption Occurs?  │
+                              └───┬───────────────┬───┘
+                                  │ Yes           │ No
+                                  ▼               ▼
+                   ┌───────────────────┐    [Normal Execution]
+                   │ Local Repair      │
+                   │ (feasible action  │
+                   │  with max pref)   │
+                   └────────┬──────────┘
+                            │
+                   ┌────────▼─────────┐
+                   │ Local repair OK? │
+                   └──┬────────────┬──┘
+                      │ Yes        │ No
+                      ▼            ▼
+             [Schedule Updated] ┌───────────────────┐
+                                │ Inter-Group       │
+                                │ Lending           │
+                                │ (lend_G)          │
+                                └────────┬──────────┘
+                                         │
+                                ┌────────▼──────────┐
+                                │ Lending OK?       │
+                                └──┬────────────┬───┘
+                                   │ Yes        │ No
+                                   ▼            ▼
+                          [Schedule Updated] ┌────────────────────┐
+                                             │ Fallback:          │
+                                             │ ASP Re-Optimization│
+                                             │ (new baseline S')  │
+                                             └──────────┬────────┘
+                                                        │
+                                                        ▼
+                                             [Recompile τ, resume]
+```
+
+---
+
+### ASP Encoding Details (Blueprint Personas)
+
+The following ASP rules show how persona facts are enriched with inference rules to compute utility values and enforce constraints. These feed into the optimization objective of the ASP solver.
+
+#### Preference Rules
+
+```prolog
+% Clinic preference: binary utility for patient-clinic match
+clinic_preference_effect(Patient, Clinic, 1) :- preference(Patient, Clinic).
+clinic_preference_effect(Patient, Clinic, 0) :- not preference(Patient, Clinic).
+
+% Doctor preference: match on specialization and experience
+doctor_preference_effect(Patient, Doctor, 1) :-
+    doctor(Doctor, _, _, _, _, Type),
+    doctor_experience(Doctor, Specialization, YearsExperience),
+    doctor_preference(Patient, Type, Specialization, RequiredYears),
+    YearsExperience >= RequiredYears.
+```
+
+#### Hard Constraints (Integrity Constraints)
+
+```prolog
+% No double-booking: same clinic, doctor, visit type, time
+:- appointment(P1, C, D, V, T), appointment(P2, C, D, V, T), P1 != P2.
+
+% Accessibility: disabled patients require accessible clinics
+:- disabled(P), appointment(P, C, _, _, _), not accessible(C).
+
+% Clinic budget limits: chronic care costs must not exceed budget
+:- chronic_cost(C, Tot), budget(C, B), Tot > B.
+
+% Urgency ordering: higher-urgency patients scheduled first
+:- needs(P1, V, U1), needs(P2, V, U2), U1 > U2,
+   appointment(P1, _, _, V, T1),
+   appointment(P2, _, _, V, T2), T1 > T2.
+```
+
+These constraints are compiled by τ^IC into L-DINF feasibility beliefs of the form `B_i(cond → ¬can_do_i(φ_A))`, ensuring they remain enforced during runtime repair.
+
+---
+
+### Model-Theoretic View of the Disruption Scenario
+
+Let φ_A = consultation(t₁). The following traces the state transitions through the L-DINF semantics:
+
+**Initial state M₀:**
+```
+(M₀, w) ⊨ can_do_docJ(φ_A)
+(M₀, w) ⊨ can_do_clinicA(φ_A)
+(M₀, w) ⊨ intend_alice(φ_A)
+```
+
+**Disruption → M₁** (belief-base update `+¬can_do_docJ(φ_A)`):
+```
+M₀ ──[+¬can_do_docJ(φ_A)]──▶ M₁
+
+(M₁, w) ⊨ B_alice(¬can_do_docJ(φ_A))
+(M₁, w) ⊨ ¬can_do_clinicA(φ_A)      [no local member can do φ_A]
+```
+
+**Lending → M₂** (group reconfiguration):
+```
+Assume: docS ∈ clinicB and (M₁, w) ⊨ can_do_docS(φ_A)
+If lending authorization holds:
+  (M₁, w) ⊨ lend_clinicA(docS, clinicB, φ_A)
+
+Lending creates M₂ where docS is temporarily authorized for clinicA:
+  (M₂, w) ⊨ can_do_clinicA(φ_A)
+```
+
+**Execution → M₃** (memory update):
+```
+(M₃, w) ⊨ do^P_docS(φ_A)
+(M₃, w) ⊭ intend_alice(φ_A)          [intention fulfilled and removed]
+```
+
+The three operations are:
+1. **M₀ → M₁**: Belief-base update (disruption propagation)
+2. **M₁ → M₂**: Controlled group reconfiguration (lending)
+3. **M₂ → M₃**: Memory update after successful execution
+
+The reasoning remains local: the transition only concerns the affected appointment, the affected clinic group, and the candidate external doctor.
+
+---
+
+### DALI Constructs Used in the Framework
+
+DALI extends Horn-clause logic with constructs for event handling, proactive behavior, and time-sensitive knowledge. The following describes the key features used in this implementation:
+
+#### Event Types
+
+| Suffix | Type | Example | Description |
+|--------|------|---------|-------------|
+| `E` | External event | `unavailableE(docJ,t1)` | Perceived changes or incoming messages |
+| `I` | Internal event | `needVisitI` | Conclusions relevant for deliberation |
+| `G` | Goal | `repair_scheduleG` | Internal commitments that expire once achieved |
+| `P` | Past event/action | `consultationP(docS,t1)` | Logged items, optionally timestamped |
+| `A` | Action | `messageA(...)` | Actions to be executed |
+
+#### Reactive Rules
+
+The central construct is the reactive rule:
+
+```prolog
+eventE :> action1A, action2A.
+```
+
+When `eventE` occurs, the agent executes `action1A`, `action2A`. Executed actions (suffix `A`) may be recorded as past items (suffix `P`), supporting patterns such as "notify only if not already notified".
+
+#### Beliefs and L-DINF Mental Actions
+
+Beliefs are represented as facts/rules in the agent KB. L-DINF mental actions (`+φ` / `-φ`) are implemented by reactive rules that `assert` or `retract` the corresponding KB facts upon external events. This yields an explicit state progression of the agent's working epistemic state (the current KB snapshot).
+
+#### Feasibility and Preferences
+
+Feasibility predicates compiled from constraints are implemented as guarded rules: `can_do_i(φ_A)` holds when the compiled preconditions are satisfied by the current KB. Preferences compiled from weak constraints are represented as explicit facts or prioritized rules encoding `pref_do_i(φ_A, d)`, enabling the agent to select, among feasible repair actions, one that maximizes the preference degree `d`. For instance:
+
+```prolog
+pref_do_i(slot(clinicA, T), 8).
+```
+
+#### Groups and Mediated Lending
+
+DALI does not provide native group operators, but supports modular agents and message passing (via `send_message/3`). Group membership and roles are implemented as KB facts:
+
+```prolog
+group_member(clinicA, docJ).
+group_member(clinicB, docS).
+role(clinicA, docJ, doctor).
+authorized(clinicA, docJ, consultation).
+```
+
+Lending `lend_G(i, H, φ_A)` is realized as a controlled protocol mediated by a dedicated agent: the mediator validates requests, consistently updates membership/authorization facts across agents, and enforces that only same-group agents (or the mediator) can trigger such updates. After reconfiguration, feasibility guards for the delegated action become satisfied at group level, enabling the repair step.
+
+---
+
 ## License
 
 Apache License 2.0
