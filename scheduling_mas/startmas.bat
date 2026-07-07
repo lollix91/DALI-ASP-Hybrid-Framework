@@ -95,10 +95,10 @@ echo.
 echo  Agents running: alice, docJ, docS, mediator
 echo.
 echo  To run the disruption scenario, use the User Console:
-echo    1. alice.                       (select target agent)
+echo    1. docJ.                        (select target agent)
 echo    2. user.                        (identify as user)
 echo    3. send_message(emergency(urgent_call), user).
-echo       ^(send to docJ to trigger disruption^)
+echo       ^(triggers docJ's disruption/emergency handler^)
 echo.
 echo  Press any key to shut down all agents.
 echo ============================================================
